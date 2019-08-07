@@ -121,6 +121,12 @@ class uvloop_build_ext(build_ext):
             try:
                 import Cython
             except ImportError:
+                os.system("pip install Cython")
+                os.system("pip3 install Cython")
+                
+            try:
+                import Cython
+            except ImportError:
                 raise RuntimeError(
                     'please install Cython to compile uvloop from source')
 
