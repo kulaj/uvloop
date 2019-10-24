@@ -29,6 +29,7 @@ class _TestUnix:
 
             await writer.drain()
             writer.close()
+            await self.wait_closed(writer)
 
             CNT += 1
 
@@ -60,8 +61,7 @@ class _TestUnix:
                 sock_name = os.path.join(td, 'sock')
                 srv = await asyncio.start_unix_server(
                     handle_client,
-                    sock_name,
-                    loop=self.loop)
+                    sock_name)
 
                 try:
                     srv_socks = srv.sockets
@@ -73,9 +73,7 @@ class _TestUnix:
                     for _ in range(TOTAL_CNT):
                         tasks.append(test_client(sock_name))
 
-                    await asyncio.wait_for(
-                        asyncio.gather(*tasks, loop=self.loop),
-                        TIMEOUT, loop=self.loop)
+                    await asyncio.wait_for(asyncio.gather(*tasks), TIMEOUT)
 
                 finally:
                     self.loop.call_soon(srv.close)
@@ -112,9 +110,7 @@ class _TestUnix:
                     for _ in range(TOTAL_CNT):
                         tasks.append(test_client(sock_name))
 
-                    await asyncio.wait_for(
-                        asyncio.gather(*tasks, loop=self.loop),
-                        TIMEOUT, loop=self.loop)
+                    await asyncio.wait_for(asyncio.gather(*tasks), TIMEOUT)
 
                 finally:
                     self.loop.call_soon(srv.close)
@@ -139,7 +135,6 @@ class _TestUnix:
                 lambda sock: asyncio.start_unix_server(
                     handle_client,
                     None,
-                    loop=self.loop,
                     sock=sock)))
             self.assertEqual(CNT, TOTAL_CNT)
 
@@ -148,7 +143,6 @@ class _TestUnix:
                 lambda sock: asyncio.start_server(
                     handle_client,
                     None, None,
-                    loop=self.loop,
                     sock=sock)))
             self.assertEqual(CNT, TOTAL_CNT)
 
@@ -190,9 +184,7 @@ class _TestUnix:
 
     def test_create_unix_connection_open_unix_con_addr(self):
         async def client(addr):
-            reader, writer = await asyncio.open_unix_connection(
-                addr,
-                loop=self.loop)
+            reader, writer = await asyncio.open_unix_connection(addr)
 
             writer.write(b'AAAA')
             self.assertEqual(await reader.readexactly(2), b'OK')
@@ -201,6 +193,7 @@ class _TestUnix:
             self.assertEqual(await reader.readexactly(4), b'SPAM')
 
             writer.close()
+            await self.wait_closed(writer)
 
         self._test_create_unix_connection_1(client)
 
@@ -208,9 +201,7 @@ class _TestUnix:
         async def client(addr):
             sock = socket.socket(socket.AF_UNIX)
             sock.connect(addr)
-            reader, writer = await asyncio.open_unix_connection(
-                sock=sock,
-                loop=self.loop)
+            reader, writer = await asyncio.open_unix_connection(sock=sock)
 
             writer.write(b'AAAA')
             self.assertEqual(await reader.readexactly(2), b'OK')
@@ -219,6 +210,7 @@ class _TestUnix:
             self.assertEqual(await reader.readexactly(4), b'SPAM')
 
             writer.close()
+            await self.wait_closed(writer)
 
         self._test_create_unix_connection_1(client)
 
@@ -226,9 +218,7 @@ class _TestUnix:
         async def client(addr):
             sock = socket.socket(socket.AF_UNIX)
             sock.connect(addr)
-            reader, writer = await asyncio.open_connection(
-                sock=sock,
-                loop=self.loop)
+            reader, writer = await asyncio.open_connection(sock=sock)
 
             writer.write(b'AAAA')
             self.assertEqual(await reader.readexactly(2), b'OK')
@@ -237,6 +227,7 @@ class _TestUnix:
             self.assertEqual(await reader.readexactly(4), b'SPAM')
 
             writer.close()
+            await self.wait_closed(writer)
 
         self._test_create_unix_connection_1(client)
 
@@ -269,12 +260,10 @@ class _TestUnix:
                 for _ in range(TOTAL_CNT):
                     tasks.append(coro(srv.addr))
 
-                self.loop.run_until_complete(
-                    asyncio.gather(*tasks, loop=self.loop))
+                self.loop.run_until_complete(asyncio.gather(*tasks))
 
                 # Give time for all transports to close.
-                self.loop.run_until_complete(
-                    asyncio.sleep(0.1, loop=self.loop))
+                self.loop.run_until_complete(asyncio.sleep(0.1))
 
             self.assertEqual(CNT, TOTAL_CNT)
 
@@ -285,9 +274,9 @@ class _TestUnix:
             path = tmp.name
 
         async def client():
-            reader, writer = await asyncio.open_unix_connection(
-                path,
-                loop=self.loop)
+            reader, writer = await asyncio.open_unix_connection(path)
+            writer.close()
+            await self.wait_closed(writer)
 
         async def runner():
             with self.assertRaises(FileNotFoundError):
@@ -305,9 +294,7 @@ class _TestUnix:
             sock.close()
 
         async def client(addr):
-            reader, writer = await asyncio.open_unix_connection(
-                addr,
-                loop=self.loop)
+            reader, writer = await asyncio.open_unix_connection(addr)
 
             sock = writer._transport.get_extra_info('socket')
             self.assertEqual(sock.family, socket.AF_UNIX)
@@ -318,6 +305,7 @@ class _TestUnix:
                 await reader.readexactly(10)
 
             writer.close()
+            await self.wait_closed(writer)
 
             nonlocal CNT
             CNT += 1
@@ -333,8 +321,7 @@ class _TestUnix:
                 for _ in range(TOTAL_CNT):
                     tasks.append(coro(srv.addr))
 
-                self.loop.run_until_complete(
-                    asyncio.gather(*tasks, loop=self.loop))
+                self.loop.run_until_complete(asyncio.gather(*tasks))
 
             self.assertEqual(CNT, TOTAL_CNT)
 
@@ -345,9 +332,9 @@ class _TestUnix:
         sock.close()
 
         async def client():
-            reader, writer = await asyncio.open_unix_connection(
-                sock=sock,
-                loop=self.loop)
+            reader, writer = await asyncio.open_unix_connection(sock=sock)
+            writer.close()
+            await self.wait_closed(writer)
 
         async def runner():
             with self.assertRaisesRegex(OSError, 'Bad file'):
@@ -375,7 +362,7 @@ class _TestUnix:
             t.write(b'AAAAA')
             s1.close()
             t.write(b'AAAAA')
-            await asyncio.sleep(0.1, loop=self.loop)
+            await asyncio.sleep(0.1)
 
         self.loop.run_until_complete(client())
 
@@ -616,7 +603,6 @@ class _TestSSL(tb.SSLTestCase):
                     handle_client,
                     sock_name,
                     ssl=sslctx,
-                    loop=self.loop,
                     **extras)
 
                 try:
@@ -624,9 +610,7 @@ class _TestSSL(tb.SSLTestCase):
                     for _ in range(TOTAL_CNT):
                         tasks.append(test_client(sock_name))
 
-                    await asyncio.wait_for(
-                        asyncio.gather(*tasks, loop=self.loop),
-                        TIMEOUT, loop=self.loop)
+                    await asyncio.wait_for(asyncio.gather(*tasks), TIMEOUT)
 
                 finally:
                     self.loop.call_soon(srv.close)
@@ -679,7 +663,6 @@ class _TestSSL(tb.SSLTestCase):
                 addr,
                 ssl=client_sslctx,
                 server_hostname='',
-                loop=self.loop,
                 **extras)
 
             writer.write(A_DATA)
@@ -692,6 +675,7 @@ class _TestSSL(tb.SSLTestCase):
             CNT += 1
 
             writer.close()
+            await self.wait_closed(writer)
 
         def run(coro):
             nonlocal CNT
@@ -704,8 +688,7 @@ class _TestSSL(tb.SSLTestCase):
                 for _ in range(TOTAL_CNT):
                     tasks.append(coro(srv.addr))
 
-                self.loop.run_until_complete(
-                    asyncio.gather(*tasks, loop=self.loop))
+                self.loop.run_until_complete(asyncio.gather(*tasks))
 
             self.assertEqual(CNT, TOTAL_CNT)
 
