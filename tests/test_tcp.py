@@ -2606,35 +2606,6 @@ class _TestSSL(tb.SSLTestCase):
             self.assertEqual(len(data), CHUNK * SIZE)
             sock.close()
 
-        def openssl_server(sock):
-            conn = openssl_ssl.Connection(sslctx_openssl, sock)
-            conn.set_accept_state()
-
-            while True:
-                try:
-                    data = conn.recv(16384)
-                    self.assertEqual(data, b'ping')
-                    break
-                except openssl_ssl.WantReadError:
-                    pass
-
-            # use renegotiation to queue data in peer _write_backlog
-            conn.renegotiate()
-            conn.send(b'pong')
-
-            data_size = 0
-            while True:
-                try:
-                    chunk = conn.recv(16384)
-                    if not chunk:
-                        break
-                    data_size += len(chunk)
-                except openssl_ssl.WantReadError:
-                    pass
-                except openssl_ssl.ZeroReturnError:
-                    break
-            self.assertEqual(data_size, CHUNK * SIZE)
-
         def run(meth):
             def wrapper(sock):
                 try:
@@ -2652,12 +2623,18 @@ class _TestSSL(tb.SSLTestCase):
                 *addr,
                 ssl=client_sslctx,
                 server_hostname='')
+            sslprotocol = writer.get_extra_info('uvloop.sslproto')
             writer.write(b'ping')
             data = await reader.readexactly(4)
             self.assertEqual(data, b'pong')
+
+            sslprotocol.pause_writing()
             for _ in range(SIZE):
                 writer.write(b'x' * CHUNK)
+
             writer.close()
+            sslprotocol.resume_writing()
+
             await self.wait_closed(writer)
             try:
                 data = await reader.read()
@@ -2667,9 +2644,6 @@ class _TestSSL(tb.SSLTestCase):
             await future
 
         with self.tcp_server(run(server)) as srv:
-            self.loop.run_until_complete(client(srv.addr))
-
-        with self.tcp_server(run(openssl_server)) as srv:
             self.loop.run_until_complete(client(srv.addr))
 
     def test_remote_shutdown_receives_trailing_data(self):
@@ -2890,6 +2864,60 @@ class _TestSSL(tb.SSLTestCase):
 
         # SSLProtocol should be DECREF to 0
         self.assertIsNone(ctx())
+
+    def test_shutdown_timeout_handler_not_set(self):
+        loop = self.loop
+        eof = asyncio.Event()
+        extra = None
+
+        def server(sock):
+            sslctx = self._create_server_ssl_context(self.ONLYCERT,
+                                                     self.ONLYKEY)
+            sock = sslctx.wrap_socket(sock, server_side=True)
+            sock.send(b'hello')
+            assert sock.recv(1024) == b'world'
+            sock.send(b'extra bytes')
+            # sending EOF here
+            sock.shutdown(socket.SHUT_WR)
+            loop.call_soon_threadsafe(eof.set)
+            # make sure we have enough time to reproduce the issue
+            assert sock.recv(1024) == b''
+            sock.close()
+
+        class Protocol(asyncio.Protocol):
+            def __init__(self):
+                self.fut = asyncio.Future(loop=loop)
+                self.transport = None
+
+            def connection_made(self, transport):
+                self.transport = transport
+
+            def data_received(self, data):
+                if data == b'hello':
+                    self.transport.write(b'world')
+                    # pause reading would make incoming data stay in the sslobj
+                    self.transport.pause_reading()
+                else:
+                    nonlocal extra
+                    extra = data
+
+            def connection_lost(self, exc):
+                if exc is None:
+                    self.fut.set_result(None)
+                else:
+                    self.fut.set_exception(exc)
+
+        async def client(addr):
+            ctx = self._create_client_ssl_context()
+            tr, pr = await loop.create_connection(Protocol, *addr, ssl=ctx)
+            await eof.wait()
+            tr.resume_reading()
+            await pr.fut
+            tr.close()
+            assert extra == b'extra bytes'
+
+        with self.tcp_server(server) as srv:
+            loop.run_until_complete(client(srv.addr))
 
 
 class Test_UV_TCPSSL(_TestSSL, tb.UVTestCase):
